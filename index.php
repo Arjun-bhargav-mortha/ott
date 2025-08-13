@@ -7,81 +7,60 @@ require_once 'includes/functions.php';
 Auth::init();
 $pageTitle = 'Home - StreamFlix Pro';
 
+// Initialize sample data if needed
+if (!file_exists(DATA_PATH . 'users.json')) {
+    require_once 'data/sample_data.php';
+}
+
+$storage = getStorage();
+
 // Get current user profile
 $profile = Auth::getCurrentProfile();
 $profileId = $profile['id'];
 
-// Get featured content
-$db = getDB();
+// Get featured content from file storage
 $featuredTitle = null;
 if ($profileId) {
-    $featuredTitle = $db->fetch(
-        "SELECT t.*, p.name as provider_name 
-         FROM titles t 
-         LEFT JOIN providers p ON t.provider_id = p.id 
-         WHERE t.is_featured = TRUE AND t.status = 'active' 
-         ORDER BY RAND() 
-         LIMIT 1"
-    );
+    $titles = $storage->read('titles');
+    $featuredTitles = array_filter($titles, function($t) {
+        return $t['is_featured'] && $t['status'] === 'active';
+    });
+    if (!empty($featuredTitles)) {
+        $featuredTitle = $featuredTitles[array_rand($featuredTitles)];
+    }
 }
 
 // Get continue watching
 $continueWatching = [];
-if ($profileId) {
-    $continueWatching = $db->fetchAll(
-        "SELECT t.*, pb.position_seconds, pb.duration_seconds,
-                CASE WHEN t.type = 'series' THEN e.name ELSE t.name END as display_name,
-                e.episode_number, s.season_number
-         FROM playbacks pb
-         LEFT JOIN titles t ON pb.title_id = t.id
-         LEFT JOIN episodes e ON pb.episode_id = e.id
-         LEFT JOIN seasons s ON e.season_id = s.id
-         WHERE pb.profile_id = ? AND pb.completed = FALSE AND pb.position_seconds > 30
-         ORDER BY pb.last_watched DESC
-         LIMIT 8",
-        [$profileId]
-    );
-}
 
 // Get trending content
-$trendingTitles = $db->fetchAll(
-    "SELECT t.*, COUNT(pb.id) as view_count
-     FROM titles t
-     LEFT JOIN playbacks pb ON t.id = pb.title_id
-     WHERE t.status = 'active'
-     GROUP BY t.id
-     ORDER BY view_count DESC, t.created_at DESC
-     LIMIT 12"
-);
+$titles = $storage->read('titles');
+$trendingTitles = array_filter($titles, function($t) {
+    return $t['status'] === 'active';
+});
+$trendingTitles = array_slice($trendingTitles, 0, 12);
 
 // Get live channels
-$liveChannels = $db->fetchAll(
-    "SELECT c.*, p.name as provider_name
-     FROM channels c
-     LEFT JOIN providers p ON c.provider_id = p.id
-     WHERE c.status = 'active'
-     ORDER BY c.sort_order ASC, c.name ASC
-     LIMIT 12"
-);
+$channels = $storage->read('channels');
+$liveChannels = array_filter($channels, function($c) {
+    return $c['status'] === 'active';
+});
+usort($liveChannels, function($a, $b) {
+    return $a['sort_order'] <=> $b['sort_order'];
+});
+$liveChannels = array_slice($liveChannels, 0, 12);
 
 // Get recent movies
-$recentMovies = $db->fetchAll(
-    "SELECT * FROM titles 
-     WHERE type = 'movie' AND status = 'active' 
-     ORDER BY created_at DESC 
-     LIMIT 12"
-);
+$recentMovies = array_filter($titles, function($t) {
+    return $t['type'] === 'movie' && $t['status'] === 'active';
+});
+$recentMovies = array_slice($recentMovies, 0, 12);
 
 // Get popular series
-$popularSeries = $db->fetchAll(
-    "SELECT t.*, COUNT(pb.id) as view_count
-     FROM titles t
-     LEFT JOIN playbacks pb ON t.id = pb.title_id
-     WHERE t.type = 'series' AND t.status = 'active'
-     GROUP BY t.id
-     ORDER BY view_count DESC, t.created_at DESC
-     LIMIT 12"
-);
+$popularSeries = array_filter($titles, function($t) {
+    return $t['type'] === 'series' && $t['status'] === 'active';
+});
+$popularSeries = array_slice($popularSeries, 0, 12);
 
 include 'includes/header.php';
 ?>

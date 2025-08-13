@@ -1,13 +1,13 @@
 <?php
 /**
- * Authentication System
+ * Authentication System (File-based)
  */
 
 class Auth {
-    private static $db;
+    private static $storage;
     
     public static function init() {
-        self::$db = getDB();
+        self::$storage = getStorage();
         
         // Start session if not already started
         if (session_status() === PHP_SESSION_NONE) {
@@ -24,10 +24,15 @@ class Auth {
     }
     
     public static function login($email, $password) {
-        $user = self::$db->fetch(
-            "SELECT id, email, password_hash, first_name, last_name, role, status FROM users WHERE email = ? AND status = 'active'",
-            [$email]
-        );
+        $users = self::$storage->read('users');
+        $user = null;
+        
+        foreach ($users as $u) {
+            if ($u['email'] === $email && $u['status'] === 'active') {
+                $user = $u;
+                break;
+            }
+        }
         
         if ($user && password_verify($password, $user['password_hash'])) {
             $_SESSION['user_id'] = $user['id'];
@@ -36,8 +41,10 @@ class Auth {
             $_SESSION['user_role'] = $user['role'];
             $_SESSION['last_activity'] = time();
             
-            // Update last login
-            self::$db->execute("UPDATE users SET updated_at = NOW() WHERE id = ?", [$user['id']]);
+            // Update last login in file
+            self::$storage->update('users', function($u) use ($user) {
+                return $u['id'] === $user['id'];
+            }, ['updated_at' => date('Y-m-d H:i:s')]);
             
             return true;
         }
@@ -46,34 +53,54 @@ class Auth {
     }
     
     public static function register($email, $password, $firstName, $lastName) {
-        // Check if email exists
-        $existing = self::$db->fetch("SELECT id FROM users WHERE email = ?", [$email]);
+        $users = self::$storage->read('users');
+        $existing = null;
+        
+        foreach ($users as $user) {
+            if ($user['email'] === $email) {
+                $existing = $user;
+                break;
+            }
+        }
+        
         if ($existing) {
             return ['success' => false, 'message' => 'Email already exists'];
         }
         
         try {
-            self::$db->beginTransaction();
-            
-            // Create user
+            $userId = time() . rand(1000, 9999); // Simple ID generation
             $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-            self::$db->execute(
-                "INSERT INTO users (email, password_hash, first_name, last_name) VALUES (?, ?, ?, ?)",
-                [$email, $passwordHash, $firstName, $lastName]
-            );
             
-            $userId = self::$db->lastInsertId();
+            $newUser = [
+                'id' => $userId,
+                'email' => $email,
+                'password_hash' => $passwordHash,
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'role' => 'user',
+                'status' => 'active',
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s')
+            ];
+            
+            self::$storage->append('users', $newUser);
             
             // Create default profile
-            self::$db->execute(
-                "INSERT INTO profiles (user_id, name, is_default) VALUES (?, ?, TRUE)",
-                [$userId, $firstName]
-            );
+            $newProfile = [
+                'id' => time() . rand(1000, 9999),
+                'user_id' => $userId,
+                'name' => $firstName,
+                'avatar' => 'default-avatar.png',
+                'maturity_rating' => 'all',
+                'language' => 'en',
+                'is_default' => true,
+                'created_at' => date('Y-m-d H:i:s')
+            ];
             
-            self::$db->commit();
+            self::$storage->append('profiles', $newProfile);
+            
             return ['success' => true, 'message' => 'Registration successful'];
         } catch (Exception $e) {
-            self::$db->rollback();
             error_log("Registration error: " . $e->getMessage());
             return ['success' => false, 'message' => 'Registration failed'];
         }
@@ -114,11 +141,16 @@ class Auth {
     
     public static function getCurrentProfile() {
         if (!isset($_SESSION['profile_id'])) {
-            // Get default profile
-            $profile = self::$db->fetch(
-                "SELECT id, name, avatar, maturity_rating, language FROM profiles WHERE user_id = ? AND is_default = TRUE",
-                [self::getUserId()]
-            );
+            $profiles = self::$storage->read('profiles');
+            $profile = null;
+            
+            foreach ($profiles as $p) {
+                if ($p['user_id'] == self::getUserId() && $p['is_default']) {
+                    $profile = $p;
+                    break;
+                }
+            }
+            
             if ($profile) {
                 $_SESSION['profile_id'] = $profile['id'];
                 $_SESSION['profile_name'] = $profile['name'];
@@ -134,10 +166,15 @@ class Auth {
     }
     
     public static function switchProfile($profileId) {
-        $profile = self::$db->fetch(
-            "SELECT id, name, avatar, maturity_rating, language FROM profiles WHERE id = ? AND user_id = ?",
-            [$profileId, self::getUserId()]
-        );
+        $profiles = self::$storage->read('profiles');
+        $profile = null;
+        
+        foreach ($profiles as $p) {
+            if ($p['id'] == $profileId && $p['user_id'] == self::getUserId()) {
+                $profile = $p;
+                break;
+            }
+        }
         
         if ($profile) {
             $_SESSION['profile_id'] = $profile['id'];

@@ -1,20 +1,14 @@
 <?php
 /**
- * Database Configuration
+ * Application Configuration (No Database)
  */
-
-// Database configuration
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'ott_streaming');
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_CHARSET', 'utf8mb4');
 
 // Site configuration
 define('SITE_URL', 'http://localhost');
 define('SITE_NAME', 'StreamFlix Pro');
 define('UPLOAD_PATH', __DIR__ . '/../uploads/');
 define('UPLOAD_URL', SITE_URL . '/uploads/');
+define('DATA_PATH', __DIR__ . '/../data/');
 
 // Security
 define('SECRET_KEY', 'your-secret-key-change-this-in-production');
@@ -35,3 +29,8 @@ error_reporting(E_ALL);
 
 // Timezone
 date_default_timezone_set('UTC');
+
+// Create data directory if it doesn't exist
+if (!file_exists(DATA_PATH)) {
+    mkdir(DATA_PATH, 0755, true);
+}

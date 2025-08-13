@@ -9,7 +9,7 @@ require_once 'includes/parsers/xmltv_parser.php';
 Auth::init();
 Auth::requireLogin();
 
-$db = getDB();
+$storage = getStorage();
 $userId = Auth::getUserId();
 $pageTitle = 'IPTV Provider Setup - StreamFlix Pro';
 
@@ -32,17 +32,26 @@ if ($_POST && Auth::validateCSRFToken($_POST['csrf_token'] ?? '')) {
             $error = 'Please fill in all required fields.';
         } else {
             try {
-                $db->beginTransaction();
-                
                 // Encrypt password if provided
                 $encryptedPassword = !empty($password) ? encryptData($password) : null;
                 
-                // Insert provider
-                $providerId = $db->execute(
-                    "INSERT INTO providers (user_id, name, type, url, username, password_encrypted, epg_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [$userId, $name, $type, $url, $username, $encryptedPassword, $epgUrl]
-                );
-                $providerId = $db->lastInsertId();
+                $providerId = time() . rand(1000, 9999);
+                
+                $newProvider = [
+                    'id' => $providerId,
+                    'user_id' => $userId,
+                    'name' => $name,
+                    'type' => $type,
+                    'url' => $url,
+                    'username' => $username,
+                    'password_encrypted' => $encryptedPassword,
+                    'epg_url' => $epgUrl,
+                    'last_sync' => date('Y-m-d H:i:s'),
+                    'status' => 'active',
+                    'created_at' => date('Y-m-d H:i:s')
+                ];
+                
+                $storage->append('providers', $newProvider);
                 
                 // Parse M3U playlist
                 if ($type === 'm3u') {
@@ -52,72 +61,37 @@ if ($_POST && Auth::validateCSRFToken($_POST['csrf_token'] ?? '')) {
                     if ($result['success']) {
                         $channelCount = 0;
                         foreach ($result['channels'] as $channel) {
-                            $db->execute(
-                                "INSERT INTO channels (provider_id, name, category, logo, stream_url, tvg_id, tvg_name, country, language, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                [
-                                    $providerId,
-                                    $channel['name'],
-                                    $channel['category'],
-                                    $channel['logo'],
-                                    $channel['stream_url'],
-                                    $channel['tvg_id'],
-                                    $channel['tvg_name'],
-                                    $channel['country'],
-                                    $channel['language'],
-                                    $channel['is_adult'] ? 1 : 0
-                                ]
-                            );
+                            $newChannel = [
+                                'id' => time() . rand(1000, 9999) . $channelCount,
+                                'provider_id' => $providerId,
+                                'name' => $channel['name'],
+                                'category' => $channel['category'],
+                                'logo' => $channel['logo'],
+                                'stream_url' => $channel['stream_url'],
+                                'tvg_id' => $channel['tvg_id'],
+                                'tvg_name' => $channel['tvg_name'],
+                                'country' => $channel['country'],
+                                'language' => $channel['language'],
+                                'is_adult' => $channel['is_adult'],
+                                'sort_order' => $channelCount,
+                                'status' => 'active',
+                                'created_at' => date('Y-m-d H:i:s')
+                            ];
+                            
+                            $storage->append('channels', $newChannel);
                             $channelCount++;
                         }
                         
-                        // Parse XMLTV EPG if provided
-                        if (!empty($epgUrl)) {
-                            $epgParser = new XMLTVParser($epgUrl);
-                            $epgResult = $epgParser->parse();
-                            
-                            if ($epgResult['success']) {
-                                foreach ($epgResult['epg_data'] as $epgEntry) {
-                                    // Find matching channel
-                                    $channel = $db->fetch(
-                                        "SELECT id FROM channels WHERE provider_id = ? AND tvg_id = ?",
-                                        [$providerId, $epgEntry['tvg_id']]
-                                    );
-                                    
-                                    if ($channel) {
-                                        $db->execute(
-                                            "INSERT INTO epg (channel_id, tvg_id, title, description, category, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                            [
-                                                $channel['id'],
-                                                $epgEntry['tvg_id'],
-                                                $epgEntry['title'],
-                                                $epgEntry['description'],
-                                                $epgEntry['category'],
-                                                $epgEntry['start_time'],
-                                                $epgEntry['end_time']
-                                            ]
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Update provider status
-                        $db->execute(
-                            "UPDATE providers SET last_sync = NOW(), status = 'active' WHERE id = ?",
-                            [$providerId]
-                        );
-                        
-                        $db->commit();
                         $success = "Provider added successfully! Imported {$channelCount} channels.";
                         
                         logActivity('provider_added', "Provider: $name, Channels: $channelCount");
                     } else {
-                        $db->rollback();
                         $error = 'Failed to parse M3U playlist: ' . $result['error'];
                     }
+                } else {
+                    $success = "Provider added successfully!";
                 }
             } catch (Exception $e) {
-                $db->rollback();
                 $error = 'Failed to add provider: ' . $e->getMessage();
                 error_log('Provider setup error: ' . $e->getMessage());
             }
@@ -126,14 +100,26 @@ if ($_POST && Auth::validateCSRFToken($_POST['csrf_token'] ?? '')) {
         $providerId = intval($_POST['provider_id'] ?? 0);
         
         if ($providerId > 0) {
-            $provider = $db->fetch(
-                "SELECT * FROM providers WHERE id = ? AND user_id = ?",
-                [$providerId, $userId]
-            );
+            $providers = $storage->read('providers');
+            $provider = null;
+            
+            foreach ($providers as $p) {
+                if ($p['id'] == $providerId && $p['user_id'] == $userId) {
+                    $provider = $p;
+                    break;
+                }
+            }
             
             if ($provider) {
                 try {
-                    $db->execute("DELETE FROM providers WHERE id = ?", [$providerId]);
+                    $storage->delete('providers', function($p) use ($providerId) {
+                        return $p['id'] == $providerId;
+                    });
+                    
+                    $storage->delete('channels', function($c) use ($providerId) {
+                        return $c['provider_id'] == $providerId;
+                    });
+                    
                     $success = 'Provider deleted successfully.';
                     logActivity('provider_deleted', $provider['name']);
                 } catch (Exception $e) {
@@ -143,73 +129,24 @@ if ($_POST && Auth::validateCSRFToken($_POST['csrf_token'] ?? '')) {
                 $error = 'Provider not found.';
             }
         }
-    } elseif ($action === 'sync_provider') {
-        $providerId = intval($_POST['provider_id'] ?? 0);
-        
-        if ($providerId > 0) {
-            $provider = $db->fetch(
-                "SELECT * FROM providers WHERE id = ? AND user_id = ?",
-                [$providerId, $userId]
-            );
-            
-            if ($provider) {
-                try {
-                    // Delete existing channels for this provider
-                    $db->execute("DELETE FROM channels WHERE provider_id = ?", [$providerId]);
-                    
-                    // Re-parse M3U playlist
-                    $parser = new M3UParser($provider['url']);
-                    $result = $parser->parse();
-                    
-                    if ($result['success']) {
-                        $channelCount = 0;
-                        foreach ($result['channels'] as $channel) {
-                            $db->execute(
-                                "INSERT INTO channels (provider_id, name, category, logo, stream_url, tvg_id, tvg_name, country, language, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                [
-                                    $providerId,
-                                    $channel['name'],
-                                    $channel['category'],
-                                    $channel['logo'],
-                                    $channel['stream_url'],
-                                    $channel['tvg_id'],
-                                    $channel['tvg_name'],
-                                    $channel['country'],
-                                    $channel['language'],
-                                    $channel['is_adult'] ? 1 : 0
-                                ]
-                            );
-                            $channelCount++;
-                        }
-                        
-                        $db->execute(
-                            "UPDATE providers SET last_sync = NOW(), status = 'active' WHERE id = ?",
-                            [$providerId]
-                        );
-                        
-                        $success = "Provider synced successfully! Updated {$channelCount} channels.";
-                        logActivity('provider_synced', $provider['name']);
-                    } else {
-                        $error = 'Failed to sync provider: ' . $result['error'];
-                    }
-                } catch (Exception $e) {
-                    $error = 'Failed to sync provider: ' . $e->getMessage();
-                    error_log('Provider sync error: ' . $e->getMessage());
-                }
-            }
-        }
     }
 }
 
 // Get user's providers
-$providers = $db->fetchAll(
-    "SELECT p.*, 
-            (SELECT COUNT(*) FROM channels WHERE provider_id = p.id) as channel_count
-     FROM providers p 
-     WHERE p.user_id = ? 
-     ORDER BY p.created_at DESC",
-    [$userId]
-);
+$allProviders = $storage->read('providers');
+$allChannels = $storage->read('channels');
+
+$providers = array_filter($allProviders, function($p) use ($userId) {
+    return $p['user_id'] == $userId;
+});
+
+// Add channel count to each provider
+foreach ($providers as &$provider) {
+    $channelCount = count(array_filter($allChannels, function($c) use ($provider) {
+        return $c['provider_id'] == $provider['id'];
+    }));
+    $provider['channel_count'] = $channelCount;
+}
 
 include 'includes/header.php';
 ?>

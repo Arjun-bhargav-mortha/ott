@@ -4,6 +4,7 @@ require_once 'includes/db.php';
 require_once 'includes/auth.php';
 require_once 'includes/functions.php';
 require_once 'includes/parsers/m3u_parser.php';
+require_once 'includes/parsers/xtream_parser.php';
 require_once 'includes/parsers/xmltv_parser.php';
 
 Auth::init();
@@ -87,6 +88,108 @@ if ($_POST && Auth::validateCSRFToken($_POST['csrf_token'] ?? '')) {
                         logActivity('provider_added', "Provider: $name, Channels: $channelCount");
                     } else {
                         $error = 'Failed to parse M3U playlist: ' . $result['error'];
+                    }
+                } elseif ($type === 'xtream') {
+                    $parser = new XtreamParser($url, $username, $password);
+                    $result = $parser->parse();
+                    
+                    if ($result['success']) {
+                        $channelCount = 0;
+                        $movieCount = 0;
+                        $seriesCount = 0;
+                        
+                        // Import channels
+                        foreach ($result['channels'] as $channel) {
+                            $newChannel = [
+                                'id' => time() . rand(1000, 9999) . $channelCount,
+                                'provider_id' => $providerId,
+                                'name' => $channel['name'],
+                                'category' => $channel['category'],
+                                'logo' => $channel['logo'],
+                                'stream_url' => $channel['stream_url'],
+                                'tvg_id' => $channel['tvg_id'],
+                                'tvg_name' => $channel['tvg_name'],
+                                'country' => $channel['country'],
+                                'language' => $channel['language'],
+                                'is_adult' => $channel['is_adult'],
+                                'sort_order' => $channelCount,
+                                'status' => 'active',
+                                'created_at' => date('Y-m-d H:i:s')
+                            ];
+                            
+                            $storage->append('channels', $newChannel);
+                            $channelCount++;
+                        }
+                        
+                        // Import movies
+                        foreach ($result['movies'] as $movie) {
+                            $newMovie = [
+                                'id' => time() . rand(1000, 9999) . $movieCount,
+                                'provider_id' => $providerId,
+                                'type' => 'movie',
+                                'name' => $movie['name'],
+                                'year' => $movie['year'],
+                                'genres' => [$movie['category']],
+                                'poster' => $movie['poster'],
+                                'backdrop' => $movie['poster'],
+                                'description' => $movie['description'],
+                                'duration' => $movie['duration'],
+                                'imdb_rating' => $movie['rating'],
+                                'content_rating' => null,
+                                'country' => null,
+                                'language' => 'en',
+                                'director' => null,
+                                'cast' => null,
+                                'trailer_url' => null,
+                                'stream_url' => $movie['stream_url'],
+                                'is_featured' => false,
+                                'sort_order' => $movieCount,
+                                'status' => 'active',
+                                'created_at' => date('Y-m-d H:i:s'),
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                            
+                            $storage->append('titles', $newMovie);
+                            $movieCount++;
+                        }
+                        
+                        // Import series
+                        foreach ($result['series'] as $series) {
+                            $newSeries = [
+                                'id' => time() . rand(1000, 9999) . $seriesCount,
+                                'provider_id' => $providerId,
+                                'type' => 'series',
+                                'name' => $series['name'],
+                                'year' => $series['year'],
+                                'genres' => [$series['category']],
+                                'poster' => $series['poster'],
+                                'backdrop' => $series['poster'],
+                                'description' => $series['description'],
+                                'duration' => null,
+                                'imdb_rating' => $series['rating'],
+                                'content_rating' => null,
+                                'country' => null,
+                                'language' => 'en',
+                                'director' => null,
+                                'cast' => null,
+                                'trailer_url' => null,
+                                'stream_url' => null,
+                                'is_featured' => false,
+                                'sort_order' => $seriesCount,
+                                'status' => 'active',
+                                'created_at' => date('Y-m-d H:i:s'),
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                            
+                            $storage->append('titles', $newSeries);
+                            $seriesCount++;
+                        }
+                        
+                        $success = "Provider added successfully! Imported {$channelCount} channels, {$movieCount} movies, and {$seriesCount} series.";
+                        
+                        logActivity('provider_added', "Provider: $name, Channels: $channelCount, Movies: $movieCount, Series: $seriesCount");
+                    } else {
+                        $error = 'Failed to parse Xtream Codes API: ' . $result['error'];
                     }
                 } else {
                     $success = "Provider added successfully!";
